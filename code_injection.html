@@ -1,4 +1,5 @@
   <script>
+    const FOCUS_TRAP_DEBUG = true; // set false when done debugging
     window.addEventListener('load', ()=>{
       let ghostPortal = document.getElementById('ghost-portal-root');
       let ghostPortalWrapper = null;
@@ -68,8 +69,13 @@
                     const selector = 'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
                     const raw = Array.from(doc.querySelectorAll(selector)).filter((el) => {
                       if (el.hasAttribute('disabled') || el.getAttribute('aria-hidden') === 'true') return false;
+                      if (el.getAttribute('tabindex') === '-1') return false;
+                      if (el.closest && el.closest('.hidden')) return false;
                       const style = doc.defaultView.getComputedStyle(el);
-                      return style.visibility !== 'hidden' && style.display !== 'none';
+                      if (style.visibility === 'hidden' || style.display === 'none') return false;
+                      const rect = el.getBoundingClientRect();
+                      if (rect.width === 0 && rect.height === 0) return false;
+                      return true;
                     });
                     const getTabIndex = (el) => {
                       const t = el.getAttribute('tabindex');
@@ -83,22 +89,55 @@
                     });
                     return raw;
                   };
+                  const iframeEl = ghostPortalWrapper.firstChild;
+                  const moveFocus = (direction) => {
+                    const focusable = getFocusableElements(iframeDoc);
+                    if (focusable.length === 0) return;
+                    const active = iframeDoc.activeElement;
+                    const idx = focusable.indexOf(active);
+                    let nextIdx;
+                    if (direction === 'prev') {
+                      nextIdx = idx <= 0 ? focusable.length - 1 : idx - 1;
+                    } else {
+                      nextIdx = idx < 0 || idx >= focusable.length - 1 ? 0 : idx + 1;
+                    }
+                    if (FOCUS_TRAP_DEBUG) {
+                      console.log('[focus-trap] moveFocus', direction, 'activeIdx', idx, 'nextIdx', nextIdx, 'active', active?.id || active?.tagName, 'target', focusable[nextIdx]?.id || focusable[nextIdx]?.tagName);
+                    }
+                    focusable[nextIdx].focus();
+                  };
+                  if (FOCUS_TRAP_DEBUG) {
+                    const list = getFocusableElements(iframeDoc);
+                    console.log('[focus-trap] focusable count', list.length, list.map((el, i) => i + ':' + (el.id || el.tagName) + (el.className ? '.' + String(el.className).split(/\s+/)[0] : '')));
+                  }
                   iframeDoc.addEventListener('keydown', (e) => {
                     if (e.key !== 'Tab') return;
                     const focusable = getFocusableElements(iframeDoc);
                     if (focusable.length === 0) return;
                     const active = iframeDoc.activeElement;
                     if (!iframeDoc.contains(active)) return;
+                    if (FOCUS_TRAP_DEBUG) console.log('[focus-trap] iframe keydown Tab', e.shiftKey ? 'Shift+Tab' : 'Tab', 'active', active?.id || active?.tagName);
                     e.preventDefault();
-                    const idx = focusable.indexOf(active);
-                    if (e.shiftKey) {
-                      const nextIdx = idx <= 0 ? focusable.length - 1 : idx - 1;
-                      focusable[nextIdx].focus();
-                    } else {
-                      const nextIdx = idx < 0 || idx >= focusable.length - 1 ? 0 : idx + 1;
-                      focusable[nextIdx].focus();
-                    }
+                    e.stopPropagation();
+                    moveFocus(e.shiftKey ? 'prev' : 'next');
                   });
+                  document.addEventListener('keydown', (e) => {
+                    if (e.key !== 'Tab') return;
+                    if (FOCUS_TRAP_DEBUG && (document.activeElement === iframeEl || document.activeElement?.closest?.('#ghost-portal-root'))) {
+                      console.log('[focus-trap] parent keydown Tab', e.shiftKey ? 'Shift+Tab' : 'Tab', 'activeElement', document.activeElement?.tagName, 'isIframe?', document.activeElement === iframeEl);
+                    }
+                    if (document.activeElement !== iframeEl) return;
+                    const focusable = getFocusableElements(iframeDoc);
+                    if (focusable.length === 0) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (e.shiftKey) {
+                      focusable[focusable.length - 1].focus();
+                    } else {
+                      focusable[0].focus();
+                    }
+                    if (FOCUS_TRAP_DEBUG) console.log('[focus-trap] parent handled: focused', e.shiftKey ? 'last' : 'first');
+                  }, true);
                   
                   console.log('Portal rewritten successfully');
                   clearInterval(portalRewriter);
