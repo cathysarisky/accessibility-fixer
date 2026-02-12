@@ -1,0 +1,34 @@
+<script>
+  window.addEventListener('load', ()=>{
+     let ghostPortal = document.getElementById('ghost-portal-root');
+     let ghostPortalWrapper = null;
+     let ghostPoweredFinder = null;
+
+     const findandRemoveGhostPowered = () => {
+            let ghostPowered = ghostPortalWrapper.firstChild.contentDocument.body.querySelector('.gh-portal-closeicon-container svg');
+            console.log('trigger', ghostPowered);
+            if(ghostPowered != null){
+              ghostPowered.style.currentColor = 'green';
+              clearInterval(ghostPoweredFinder);
+            }
+          }
+
+     let portalObserver = new MutationObserver((mutations)=> {
+          mutations.forEach((mutation) => {
+              if(mutation.addedNodes[0]?.nodeName === 'DIV'){
+               ghostPortalWrapper = mutation.addedNodes[0];
+               ghostPoweredFinder = setInterval(findandRemoveGhostPowered, 50);             
+              }
+          });         
+         });
+
+      portalObserver.observe(ghostPortal, {
+           attributes: false,
+           characterData: true,
+           childList: true,
+           subtree: true,
+           attributeOldValue: false,
+           characterDataOldValue: true
+         })
+     }) 
+</script>
