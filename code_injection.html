@@ -62,6 +62,43 @@
                       }
                     });
                   }
+
+                  // Trap tab navigation within the iframe
+                  const getFocusableElements = (doc) => {
+                    const selector = 'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+                    const raw = Array.from(doc.querySelectorAll(selector)).filter((el) => {
+                      if (el.hasAttribute('disabled') || el.getAttribute('aria-hidden') === 'true') return false;
+                      const style = doc.defaultView.getComputedStyle(el);
+                      return style.visibility !== 'hidden' && style.display !== 'none';
+                    });
+                    const getTabIndex = (el) => {
+                      const t = el.getAttribute('tabindex');
+                      return t === null ? 0 : parseInt(t, 10);
+                    };
+                    raw.sort((a, b) => {
+                      const ta = getTabIndex(a);
+                      const tb = getTabIndex(b);
+                      if (ta !== tb) return (ta || Infinity) - (tb || Infinity);
+                      return 0;
+                    });
+                    return raw;
+                  };
+                  iframeDoc.addEventListener('keydown', (e) => {
+                    if (e.key !== 'Tab') return;
+                    const focusable = getFocusableElements(iframeDoc);
+                    if (focusable.length === 0) return;
+                    const active = iframeDoc.activeElement;
+                    if (!iframeDoc.contains(active)) return;
+                    e.preventDefault();
+                    const idx = focusable.indexOf(active);
+                    if (e.shiftKey) {
+                      const nextIdx = idx <= 0 ? focusable.length - 1 : idx - 1;
+                      focusable[nextIdx].focus();
+                    } else {
+                      const nextIdx = idx < 0 || idx >= focusable.length - 1 ? 0 : idx + 1;
+                      focusable[nextIdx].focus();
+                    }
+                  });
                   
                   console.log('Portal rewritten successfully');
                   clearInterval(portalRewriter);
