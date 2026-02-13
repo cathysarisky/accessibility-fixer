@@ -1,0 +1,336 @@
+  <script>
+    const FOCUS_TRAP_DEBUG = false; // set false when done debugging
+    window.addEventListener('load', ()=>{
+      let ghostPortal = document.getElementById('ghost-portal-root');
+      let ghostPortalWrapper = null;
+      let portalRewriter = null;
+
+      const identifyTitle = ( iframeDoc) => {
+        let title = "Account Management Portal";
+        // if there's a signup class on a child, set the title to account signup
+        const signupChild = iframeDoc.querySelector('.signup');
+        console.log('signupChild', signupChild);
+        if(signupChild){
+          title = "Account Signup";
+        }
+        const signinChild = iframeDoc.querySelector('.signin');
+        console.log('signinChild', signinChild);
+        if(signinChild){
+          title = "Account Signin";
+        }
+        return title;
+      }
+
+      const adjustCadenceLabels = (iframeDoc) => {
+        // update section.ghost-portal-products - add an aria-label
+        const productsSection = iframeDoc.querySelector('section.gh-portal-products');
+                  console.log('productsSection', productsSection);
+        if(!productsSection) {
+          return;
+        }
+
+        productsSection.setAttribute('aria-label', 'Subscription options');
+        // loop through .gh-portal-product-card . Get the h4.gh-portal-product-name for each 
+        // add the name to the aria-label of each gh-portal-btn
+        const productCards = productsSection.querySelectorAll('.gh-portal-product-card');
+        productCards.forEach(productCard => {
+          const productName = productCard.querySelector('h4.gh-portal-product-name').textContent;
+          const productButton = productCard.querySelector('.gh-portal-btn');
+          productButton.setAttribute('aria-label', `Choose ${productName} subscription`);
+        });
+
+      }
+
+      const adjustCadenceToggle = (iframeDoc) => {
+        const priceToggle = iframeDoc.querySelector('.gh-portal-products-pricetoggle');
+        if (!priceToggle) {
+          return;
+        }
+
+        // Set up as a radiogroup for better screen reader support
+        priceToggle.setAttribute('role', 'radiogroup');
+        priceToggle.setAttribute('aria-label', 'Billing period');
+
+        const monthlyBtn = priceToggle.querySelector('[data-test-button="switch-monthly"]');
+        const yearlyBtn = priceToggle.querySelector('[data-test-button="switch-yearly"]');
+
+        if (monthlyBtn && yearlyBtn) {
+          // Set up as radio buttons
+          monthlyBtn.setAttribute('role', 'radio');
+          yearlyBtn.setAttribute('role', 'radio');
+
+          // Set aria-checked based on active class
+          const updateToggleState = () => {
+            const monthlyActive = monthlyBtn.classList.contains('active');
+            const yearlyActive = yearlyBtn.classList.contains('active');
+
+            monthlyBtn.setAttribute('aria-checked', monthlyActive ? 'true' : 'false');
+            yearlyBtn.setAttribute('aria-checked', yearlyActive ? 'true' : 'false');
+
+            // Also add aria-label to include the discount info if present
+            const yearlyDiscount = yearlyBtn.querySelector('.gh-portal-maximum-discount');
+            if (yearlyDiscount && yearlyActive) {
+              const discountText = yearlyDiscount.textContent.trim();
+              yearlyBtn.setAttribute('aria-label', `Yearly ${discountText}`);
+            } else {
+              yearlyBtn.setAttribute('aria-label', 'Yearly');
+            }
+            monthlyBtn.setAttribute('aria-label', 'Monthly');
+          };
+
+          // Initial state
+          updateToggleState();
+
+          // Watch for changes (when user clicks to toggle)
+          const toggleObserver = new MutationObserver(() => {
+            updateToggleState();
+          });
+          toggleObserver.observe(priceToggle, {
+            attributes: true,
+            attributeFilter: ['class'],
+            subtree: true
+          });
+        }
+      }
+
+      const redrawErrorMessages = (iframeDoc) => {
+        // Handle general error message - make it announce assertively
+        const generalErrorMessages = iframeDoc.querySelectorAll('.gh-portal-error-message');
+        generalErrorMessages.forEach(errorMsg => {
+          errorMsg.setAttribute('aria-live', 'assertive');
+          errorMsg.setAttribute('role', 'alert');
+        });
+
+        // find input.gh-portal-input.error and add aria-invalid="true"
+        const errorInputs = iframeDoc.querySelectorAll('input.gh-portal-input.error');
+        console.log('errorInputs', errorInputs);
+        errorInputs.forEach(errorInput => {
+          errorInput.setAttribute('aria-invalid', 'true');
+          
+          // Find the error message <p> in the same section's labelcontainer
+          const inputSection = errorInput.closest('.gh-portal-input-section');
+          if (inputSection) {
+            const labelContainer = inputSection.querySelector('.gh-portal-input-labelcontainer');
+            if (labelContainer) {
+              const errorMessage = labelContainer.querySelector('p');
+              if (errorMessage) {
+                // Give the error message an ID if it doesn't have one
+                const errorId = errorMessage.id || `error-${errorInput.id || errorInput.name || 'input'}`;
+                if (!errorMessage.id) {
+                  errorMessage.id = errorId;
+                }
+                
+                // Link the input to the error message (no aria-live - just read when focused)
+                const describedBy = errorInput.getAttribute('aria-describedby');
+                if (describedBy && !describedBy.includes(errorId)) {
+                  errorInput.setAttribute('aria-describedby', `${describedBy} ${errorId}`);
+                } else if (!describedBy) {
+                  errorInput.setAttribute('aria-describedby', errorId);
+                }
+              }
+            }
+          }
+          console.log('errorInput', errorInput);
+        });
+      }
+
+      const rewritePortal = () => {
+              const iframeDoc = ghostPortalWrapper.firstChild.contentDocument;
+              if(iframeDoc && iframeDoc.head){
+                const closeIcon = iframeDoc.querySelector('.gh-portal-closeicon');
+                
+                // Check if stylesheet already exists and element is ready
+                if(!iframeDoc.getElementById('injected-stylesheet') && closeIcon){
+                  // Inject stylesheet
+                  const styleSheet = iframeDoc.createElement('style');
+                  styleSheet.id = 'injected-stylesheet';
+                  styleSheet.textContent = `
+                    .gh-portal-closeicon {
+                      color: var(--grey1);
+                    }
+                    .gh-portal-closeicon:hover {
+                      color: var(--black);
+                    }
+                    .gh-portal-closeicon-container {
+                      cursor: pointer;
+                    }
+                    .gh-portal-closeicon:focus {
+                      outline: 2px solid var(--grey1);
+                      outline-offset: 2px;
+                    }
+                    .gh-portal-closeicon:focus-visible {
+                      outline: 2px solid var(--black);
+                      outline-offset: 2px;
+                      border-radius: 50%
+                    }
+                    .gh-portal-btn.gh-portal-btn-list:focus-visible, .gh-portal-btn:focus-visible {
+                      outline: 2px solid var(--black);
+                      outline-offset: 2px;
+                    }
+                    .gh-portal-input:focus-visible {
+                      border-color: var(--black);}
+                  `;
+                  iframeDoc.head.appendChild(styleSheet);
+
+                  // Make close icon keyboard focusable
+                  if(!closeIcon.hasAttribute('tabindex')){
+                    closeIcon.setAttribute('tabindex', '0');
+                    closeIcon.setAttribute('role', 'button');
+                    closeIcon.setAttribute('aria-label', 'Close popup');
+                    
+                    // Add keyboard event handler for Enter and Space
+                    closeIcon.addEventListener('keydown', (e) => {
+                      if(e.key === 'Enter' || e.key === ' '){
+                        e.preventDefault();
+                        // Dispatch a click event since SVG elements may not support .click()
+                        const clickEvent = new MouseEvent('click', {
+                          bubbles: true,
+                          cancelable: true,
+                          view: iframeDoc.defaultView
+                        });
+                        closeIcon.dispatchEvent(clickEvent);
+                      }
+                    });
+                  }
+
+                  // Trap tab navigation within the iframe
+                  const getFocusableElements = (doc) => {
+                    const selector = 'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+                    const raw = Array.from(doc.querySelectorAll(selector)).filter((el) => {
+                      if (el.hasAttribute('disabled') || el.getAttribute('aria-hidden') === 'true') return false;
+                      if (el.getAttribute('tabindex') === '-1') return false;
+                      if (el.closest && el.closest('.hidden')) return false;
+                      const style = doc.defaultView.getComputedStyle(el);
+                      if (style.visibility === 'hidden' || style.display === 'none') return false;
+                      const rect = el.getBoundingClientRect();
+                      if (rect.width === 0 && rect.height === 0) return false;
+                      return true;
+                    });
+                    const getTabIndex = (el) => {
+                      const t = el.getAttribute('tabindex');
+                      return t === null ? 0 : parseInt(t, 10);
+                    };
+                    raw.sort((a, b) => {
+                      const ta = getTabIndex(a);
+                      const tb = getTabIndex(b);
+                      if (ta !== tb) return (ta || Infinity) - (tb || Infinity);
+                      return 0;
+                    });
+                    return raw;
+                  };
+                  const iframeEl = ghostPortalWrapper.firstChild;
+
+                  // set the title of the iframe 
+                  iframeEl.title = identifyTitle(iframeDoc);
+                  adjustCadenceLabels(iframeDoc);
+                  adjustCadenceToggle(iframeDoc);
+                  redrawErrorMessages(iframeDoc);
+
+                  // Watch for error messages appearing dynamically
+                  const errorObserver = new MutationObserver((mutations) => {
+                    let hasErrors = false;
+                    mutations.forEach((mutation) => {
+                      if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+                        const target = mutation.target;
+                        if (target.classList && target.classList.contains('error') && target.classList.contains('gh-portal-input')) {
+                          hasErrors = true;
+                        }
+                      }
+                      if (mutation.type === 'childList') {
+                        mutation.addedNodes.forEach((node) => {
+                          if (node.nodeType === 1) {
+                            if (node.classList && node.classList.contains('error') && node.classList.contains('gh-portal-input')) {
+                              hasErrors = true;
+                            }
+                            if (node.querySelector && node.querySelector('input.gh-portal-input.error')) {
+                              hasErrors = true;
+                            }
+                          }
+                        });
+                      }
+                    });
+                    if (hasErrors) {
+                      redrawErrorMessages(iframeDoc);
+                    }
+                  });
+                  errorObserver.observe(iframeDoc.body, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ['class']
+                  });
+
+                  const moveFocus = (direction) => {
+                    const focusable = getFocusableElements(iframeDoc);
+                    if (focusable.length === 0) return;
+                    const active = iframeDoc.activeElement;
+                    const idx = focusable.indexOf(active);
+                    let nextIdx;
+                    if (direction === 'prev') {
+                      nextIdx = idx <= 0 ? focusable.length - 1 : idx - 1;
+                    } else {
+                      nextIdx = idx < 0 || idx >= focusable.length - 1 ? 0 : idx + 1;
+                    }
+                    if (FOCUS_TRAP_DEBUG) {
+                      console.log('[focus-trap] moveFocus', direction, 'activeIdx', idx, 'nextIdx', nextIdx, 'active', active?.id || active?.tagName, 'target', focusable[nextIdx]?.id || focusable[nextIdx]?.tagName);
+                    }
+                    focusable[nextIdx].focus();
+                  };
+                  if (FOCUS_TRAP_DEBUG) {
+                    const list = getFocusableElements(iframeDoc);
+                    console.log('[focus-trap] focusable count', list.length, list.map((el, i) => i + ':' + (el.id || el.tagName) + (el.className ? '.' + String(el.className).split(/\s+/)[0] : '')));
+                  }
+                  iframeDoc.addEventListener('keydown', (e) => {
+                    if (e.key !== 'Tab') return;
+                    const focusable = getFocusableElements(iframeDoc);
+                    if (focusable.length === 0) return;
+                    const active = iframeDoc.activeElement;
+                    if (!iframeDoc.contains(active)) return;
+                    if (FOCUS_TRAP_DEBUG) console.log('[focus-trap] iframe keydown Tab', e.shiftKey ? 'Shift+Tab' : 'Tab', 'active', active?.id || active?.tagName);
+                    e.preventDefault();
+                    e.stopPropagation();
+                    moveFocus(e.shiftKey ? 'prev' : 'next');
+                  });
+                  document.addEventListener('keydown', (e) => {
+                    if (e.key !== 'Tab') return;
+                    if (FOCUS_TRAP_DEBUG && (document.activeElement === iframeEl || document.activeElement?.closest?.('#ghost-portal-root'))) {
+                      console.log('[focus-trap] parent keydown Tab', e.shiftKey ? 'Shift+Tab' : 'Tab', 'activeElement', document.activeElement?.tagName, 'isIframe?', document.activeElement === iframeEl);
+                    }
+                    if (document.activeElement !== iframeEl) return;
+                    const focusable = getFocusableElements(iframeDoc);
+                    if (focusable.length === 0) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (e.shiftKey) {
+                      focusable[focusable.length - 1].focus();
+                    } else {
+                      focusable[0].focus();
+                    }
+                    if (FOCUS_TRAP_DEBUG) console.log('[focus-trap] parent handled: focused', e.shiftKey ? 'last' : 'first');
+                  }, true);
+                  
+                  console.log('Portal rewritten successfully');
+                  clearInterval(portalRewriter);
+                }
+              }
+            }
+
+      let portalObserver = new MutationObserver((mutations)=> {
+            mutations.forEach((mutation) => {
+                if(mutation.addedNodes[0]?.nodeName === 'DIV'){
+                ghostPortalWrapper = mutation.addedNodes[0];
+                portalRewriter = setInterval(rewritePortal, 50);             
+                }
+            });         
+          });
+
+        portalObserver.observe(ghostPortal, {
+            attributes: false,
+            characterData: true,
+            childList: true,
+            subtree: true,
+            attributeOldValue: false,
+            characterDataOldValue: true
+          })
+      }) 
+  </script>
