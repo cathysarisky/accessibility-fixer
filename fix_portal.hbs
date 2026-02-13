@@ -44,6 +44,9 @@
 
       }
 
+      // Track toggle observers to prevent duplicates
+      const toggleObservers = new WeakMap();
+      
       const adjustCadenceToggle = (iframeDoc) => {
         const priceToggle = iframeDoc.querySelector('.gh-portal-products-pricetoggle');
         if (!priceToggle) {
@@ -84,15 +87,19 @@
           // Initial state
           updateToggleState();
 
-          // Watch for changes (when user clicks to toggle)
-          const toggleObserver = new MutationObserver(() => {
-            updateToggleState();
-          });
-          toggleObserver.observe(priceToggle, {
-            attributes: true,
-            attributeFilter: ['class'],
-            subtree: true
-          });
+          // Only set up observer if it doesn't already exist
+          if (!toggleObservers.has(priceToggle)) {
+            // Watch for changes (when user clicks to toggle)
+            const toggleObserver = new MutationObserver(() => {
+              updateToggleState();
+            });
+            toggleObserver.observe(priceToggle, {
+              attributes: true,
+              attributeFilter: ['class'],
+              subtree: true
+            });
+            toggleObservers.set(priceToggle, toggleObserver);
+          }
         }
       }
 
@@ -230,6 +237,146 @@
         }
       }
 
+      // Function to run all accessibility adjustments
+      const runAllAdjustments = (iframeDoc) => {
+        try {
+          const iframeEl = ghostPortalWrapper.firstChild;
+          iframeEl.title = identifyTitle(iframeDoc);
+          adjustCadenceLabels(iframeDoc);
+          adjustCadenceToggle(iframeDoc);
+          redrawErrorMessages(iframeDoc);
+          adjustMagiclinkState(iframeDoc);
+        } catch (error) {
+          console.error('Error running accessibility adjustments:', error);
+        }
+      };
+
+      // Navigation detection - watches for screen changes
+      const navigationObservers = new WeakMap();
+      const navigationTimeouts = new WeakMap();
+      const setupNavigationObserver = (iframeDoc) => {
+        if (!iframeDoc || !iframeDoc.body) {
+          return;
+        }
+        
+        // Only set up once per iframe document
+        if (navigationObservers.has(iframeDoc)) {
+          return;
+        }
+        
+        // Track the current screen state
+        let lastScreenState = null;
+        const getScreenState = () => {
+          const wrapper = iframeDoc.querySelector('.gh-portal-popup-wrapper');
+          if (!wrapper) return null;
+          
+          // Get classes that indicate screen state
+          const classes = Array.from(wrapper.classList);
+          const hasSignin = wrapper.querySelector('.signin') !== null;
+          const hasSignup = wrapper.querySelector('.signup') !== null;
+          const hasMagiclink = wrapper.classList.contains('magiclink');
+          const hasProducts = wrapper.querySelector('.gh-portal-products') !== null;
+          
+          return {
+            classes: classes.join(' '),
+            hasSignin,
+            hasSignup,
+            hasMagiclink,
+            hasProducts,
+            // Also track key elements that indicate screen state
+            hasInboxNotification: wrapper.querySelector('.gh-portal-inbox-notification') !== null,
+            hasOtpInput: wrapper.querySelector('#input-otc') !== null
+          };
+        };
+        
+        // Debounced function to check for navigation
+        const checkNavigation = () => {
+          const existingTimeout = navigationTimeouts.get(iframeDoc);
+          if (existingTimeout) {
+            clearTimeout(existingTimeout);
+          }
+          
+          const timeout = setTimeout(() => {
+            const currentState = getScreenState();
+            
+            // Check if screen has changed
+            if (lastScreenState === null || 
+                JSON.stringify(lastScreenState) !== JSON.stringify(currentState)) {
+              
+              console.log('Screen navigation detected:', currentState);
+              
+              // Re-run all adjustments
+              runAllAdjustments(iframeDoc);
+              
+              lastScreenState = currentState;
+            }
+            
+            navigationTimeouts.delete(iframeDoc);
+          }, 150); // Small delay to batch rapid mutations
+          
+          navigationTimeouts.set(iframeDoc, timeout);
+        };
+        
+        // Watch for major DOM changes that indicate navigation
+        const observer = new MutationObserver((mutations) => {
+          let shouldCheck = false;
+          
+          mutations.forEach((mutation) => {
+            // Check for class changes on wrapper (indicates screen change)
+            if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+              const target = mutation.target;
+              if (target.classList && (
+                  target.classList.contains('gh-portal-popup-wrapper') ||
+                  target.closest('.gh-portal-popup-wrapper')
+                )) {
+                shouldCheck = true;
+              }
+            }
+            
+            // Check for major structural changes (new sections appearing)
+            if (mutation.type === 'childList') {
+              mutation.addedNodes.forEach((node) => {
+                if (node.nodeType === 1) {
+                  // Check if important sections are being added
+                  if (node.classList && (
+                      node.classList.contains('gh-portal-inbox-notification') ||
+                      node.classList.contains('gh-portal-products') ||
+                      node.classList.contains('gh-portal-otp') ||
+                      node.querySelector('.gh-portal-inbox-notification') ||
+                      node.querySelector('.gh-portal-products') ||
+                      node.querySelector('.gh-portal-otp')
+                    )) {
+                    shouldCheck = true;
+                  }
+                  
+                  // Check if wrapper class changed
+                  if (node.classList && node.classList.contains('gh-portal-popup-wrapper')) {
+                    shouldCheck = true;
+                  }
+                }
+              });
+            }
+          });
+          
+          if (shouldCheck) {
+            checkNavigation();
+          }
+        });
+        
+        observer.observe(iframeDoc.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['class']
+        });
+        
+        navigationObservers.set(iframeDoc, observer);
+        
+        // Set initial state and run adjustments
+        lastScreenState = getScreenState();
+        runAllAdjustments(iframeDoc);
+      };
+
       // Persistent observer for magiclink state - runs independently
       const magiclinkObservers = new WeakMap();
       const magiclinkTimeouts = new WeakMap();
@@ -296,6 +443,9 @@
               const iframeDoc = ghostPortalWrapper.firstChild.contentDocument;
               if(iframeDoc && iframeDoc.head){
                 const closeIcon = iframeDoc.querySelector('.gh-portal-closeicon');
+                
+                // Set up navigation observer to detect screen changes
+                setupNavigationObserver(iframeDoc);
                 
                 // Set up magiclink observer regardless of stylesheet state
                 setupMagiclinkObserver(iframeDoc);
@@ -490,9 +640,8 @@
                   clearInterval(portalRewriter);
                 }
                 
-                // Always check and adjust magiclink state, even if stylesheet already exists
-                // This handles navigation from sign-in to magiclink state
-                adjustMagiclinkState(iframeDoc);
+                // Navigation observer handles all adjustments when screens change
+                // It's set up at the beginning of rewritePortal and runs independently
               }
             }
 
