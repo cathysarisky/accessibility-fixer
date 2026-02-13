@@ -237,6 +237,102 @@
         }
       }
 
+      const adjustToggleWrappers = (iframeDoc) => {
+        try {
+          const toggleWrappers = iframeDoc.querySelectorAll('.gh-portal-list-toggle-wrapper');
+          if (!toggleWrappers.length) return;
+
+          toggleWrappers.forEach((wrapper, index) => {
+            if (wrapper.hasAttribute('data-toggle-wrapper-processed')) return;
+            wrapper.setAttribute('data-toggle-wrapper-processed', 'true');
+
+            const checkbox = wrapper.querySelector('input[type="checkbox"]');
+            if (!checkbox) return;
+
+            const listDetail = wrapper.querySelector('.gh-portal-list-detail');
+            const titleElement = listDetail ? listDetail.querySelector('h3') : null;
+            const labelText = (titleElement && titleElement.textContent.trim()) || checkbox.getAttribute('aria-label') || `Toggle ${index + 1}`;
+
+            checkbox.setAttribute('aria-label', labelText);
+            checkbox.setAttribute('tabindex', '-1');
+
+            const labelEl = wrapper.querySelector('label.switch');
+            if (labelEl && labelEl.getAttribute('for') !== checkbox.id) {
+              labelEl.setAttribute('for', checkbox.id);
+            }
+
+            // Wrapper is the only tab stop (no focus redirect). Tab then moves correctly: 1st wrapper -> 2nd wrapper.
+            wrapper.setAttribute('tabindex', '0');
+            wrapper.setAttribute('role', 'button');
+            wrapper.setAttribute('aria-pressed', checkbox.checked ? 'true' : 'false');
+            checkbox.addEventListener('change', () => {
+              wrapper.setAttribute('aria-pressed', checkbox.checked ? 'true' : 'false');
+            });
+
+            const triggerToggle = () => {
+              const toggleSpan = wrapper.querySelector('span.input-toggle-component');
+              if (toggleSpan) {
+                toggleSpan.click();
+              } else {
+                const lbl = wrapper.querySelector('label.switch');
+                if (lbl) lbl.click(); else checkbox.click();
+              }
+            };
+
+            // Space/Enter: handle on the wrapper in capture phase so we run before anything else
+            wrapper.addEventListener('keydown', (e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              if (iframeDoc.activeElement !== wrapper) return;
+              e.preventDefault();
+              e.stopPropagation();
+              triggerToggle();
+            }, true);
+
+            wrapper.style.cursor = 'pointer';
+            wrapper.addEventListener('click', (e) => {
+              if (e.target === checkbox || e.target.closest('label.switch')) return;
+              triggerToggle();
+            });
+          });
+
+          // Fallback: document-level (capture) in case focus is on a child of the wrapper
+          if (!iframeDoc.body.hasAttribute('data-toggle-keydown-bound')) {
+            iframeDoc.body.setAttribute('data-toggle-keydown-bound', 'true');
+            iframeDoc.addEventListener('keydown', (e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              const active = iframeDoc.activeElement;
+              const w = active && (active.classList && active.classList.contains('gh-portal-list-toggle-wrapper') ? active : (active.closest && active.closest('.gh-portal-list-toggle-wrapper')));
+              if (!w) return;
+              const toggleSpan = w.querySelector('span.input-toggle-component');
+              const lbl = w.querySelector('label.switch');
+              const cb = w.querySelector('input[type="checkbox"]');
+              e.preventDefault();
+              e.stopPropagation();
+              if (toggleSpan) toggleSpan.click(); else if (lbl) lbl.click(); else if (cb) cb.click();
+            }, true);
+          }
+
+          if (!iframeDoc.getElementById('toggle-wrapper-focus-styles')) {
+            const styleEl = iframeDoc.createElement('style');
+            styleEl.id = 'toggle-wrapper-focus-styles';
+            styleEl.textContent = `
+              .gh-portal-list-toggle-wrapper:focus,
+              .gh-portal-list-toggle-wrapper:focus-within {
+                outline: 2px solid var(--black);
+                outline-offset: 2px;
+                border-radius: 4px;
+              }
+              .gh-portal-list-toggle-wrapper input[type="checkbox"]:focus {
+                outline: none;
+              }
+            `;
+            iframeDoc.head.appendChild(styleEl);
+          }
+        } catch (error) {
+          console.error('Error in adjustToggleWrappers:', error);
+        }
+      }
+
       // Function to run all accessibility adjustments
       const runAllAdjustments = (iframeDoc) => {
         try {
@@ -246,6 +342,7 @@
           adjustCadenceToggle(iframeDoc);
           redrawErrorMessages(iframeDoc);
           adjustMagiclinkState(iframeDoc);
+          adjustToggleWrappers(iframeDoc);
         } catch (error) {
           console.error('Error running accessibility adjustments:', error);
         }
@@ -277,15 +374,21 @@
           const hasMagiclink = wrapper.classList.contains('magiclink');
           const hasProducts = wrapper.querySelector('.gh-portal-products') !== null;
           
+          // Check for email preferences screen
+          const emailPrefsHeader = iframeDoc.querySelector('.gh-portal-detail-header h3.gh-portal-main-title');
+          const hasEmailPreferences = emailPrefsHeader && emailPrefsHeader.textContent.trim() === 'Email preferences';
+          
           return {
             classes: classes.join(' '),
             hasSignin,
             hasSignup,
             hasMagiclink,
             hasProducts,
+            hasEmailPreferences,
             // Also track key elements that indicate screen state
             hasInboxNotification: wrapper.querySelector('.gh-portal-inbox-notification') !== null,
-            hasOtpInput: wrapper.querySelector('#input-otc') !== null
+            hasOtpInput: wrapper.querySelector('#input-otc') !== null,
+            hasToggleWrappers: wrapper.querySelector('.gh-portal-list-toggle-wrapper') !== null
           };
         };
         
@@ -342,9 +445,13 @@
                       node.classList.contains('gh-portal-inbox-notification') ||
                       node.classList.contains('gh-portal-products') ||
                       node.classList.contains('gh-portal-otp') ||
+                      node.classList.contains('gh-portal-list-toggle-wrapper') ||
+                      node.classList.contains('gh-portal-detail-header') ||
                       node.querySelector('.gh-portal-inbox-notification') ||
                       node.querySelector('.gh-portal-products') ||
-                      node.querySelector('.gh-portal-otp')
+                      node.querySelector('.gh-portal-otp') ||
+                      node.querySelector('.gh-portal-list-toggle-wrapper') ||
+                      node.querySelector('.gh-portal-detail-header')
                     )) {
                     shouldCheck = true;
                   }
@@ -495,6 +602,9 @@
                      }
                     .gh-portal-products-pricetoggle .gh-portal-btn[aria-checked="false"] {
                       color: white;
+                      }
+                    .gh-portal-list-toggle-wrapper:focus-visible {
+                       border: 2px solid var(--brandcolor)
                       }
                   `;
                   iframeDoc.head.appendChild(styleSheet);
