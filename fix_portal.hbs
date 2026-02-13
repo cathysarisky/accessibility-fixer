@@ -239,10 +239,8 @@
 
       const adjustToggleWrappers = (iframeDoc) => {
         try {
-          const toggleWrappers = iframeDoc.querySelectorAll('.gh-portal-list-toggle-wrapper');
-          if (!toggleWrappers.length) return;
-
-          toggleWrappers.forEach((wrapper, index) => {
+          const listWrappers = iframeDoc.querySelectorAll('.gh-portal-list-toggle-wrapper');
+          listWrappers.forEach((wrapper, index) => {
             if (wrapper.hasAttribute('data-toggle-wrapper-processed')) return;
             wrapper.setAttribute('data-toggle-wrapper-processed', 'true');
 
@@ -261,58 +259,95 @@
               labelEl.setAttribute('for', checkbox.id);
             }
 
-            // Wrapper is the only tab stop (no focus redirect). Tab then moves correctly: 1st wrapper -> 2nd wrapper.
             wrapper.setAttribute('tabindex', '0');
-            wrapper.setAttribute('role', 'button');
-            wrapper.setAttribute('aria-pressed', checkbox.checked ? 'true' : 'false');
-            checkbox.addEventListener('change', () => {
-              wrapper.setAttribute('aria-pressed', checkbox.checked ? 'true' : 'false');
-            });
 
             const triggerToggle = () => {
-              const toggleSpan = wrapper.querySelector('span.input-toggle-component');
-              if (toggleSpan) {
-                toggleSpan.click();
-              } else {
-                const lbl = wrapper.querySelector('label.switch');
-                if (lbl) lbl.click(); else checkbox.click();
-              }
+              const span = wrapper.querySelector('span.input-toggle-component');
+              if (span) span.click();
+              else { const l = wrapper.querySelector('label.switch'); if (l) l.click(); }
+              wrapper.focus();
             };
-
-            // Space/Enter: handle on the wrapper in capture phase so we run before anything else
             wrapper.addEventListener('keydown', (e) => {
               if (e.key !== 'Enter' && e.key !== ' ') return;
               if (iframeDoc.activeElement !== wrapper) return;
               e.preventDefault();
               e.stopPropagation();
               triggerToggle();
-              // Keep focus on wrapper so tab order position is preserved
-              wrapper.focus();
             }, true);
-
-            wrapper.style.cursor = 'pointer';
-            wrapper.addEventListener('click', (e) => {
-              if (e.target === checkbox || e.target.closest('label.switch')) return;
-              triggerToggle();
-            });
           });
 
-          // Fallback: document-level (capture) in case focus is on a child of the wrapper
-          if (!iframeDoc.body.hasAttribute('data-toggle-keydown-bound')) {
-            iframeDoc.body.setAttribute('data-toggle-keydown-bound', 'true');
-            iframeDoc.addEventListener('keydown', (e) => {
+          // Account / email prefs: section > .gh-portal-list-detail + div > .gh-portal-for-switch (no .gh-portal-list-toggle-wrapper)
+          iframeDoc.querySelectorAll('.gh-portal-for-switch').forEach((switchEl) => {
+            if (switchEl.closest('.gh-portal-list-toggle-wrapper')) return;
+            const wrapper = switchEl.parentElement;
+            if (!wrapper || wrapper.hasAttribute('data-toggle-wrapper-processed')) return;
+            const checkbox = switchEl.querySelector('input[type="checkbox"]');
+            if (!checkbox) return;
+
+            const section = switchEl.closest('section');
+            const listDetail = section ? section.querySelector('.gh-portal-list-detail') : null;
+            const titleEl = listDetail ? listDetail.querySelector('h3') : null;
+            const labelText = (titleEl && titleEl.textContent.trim()) || checkbox.getAttribute('aria-label') || 'Toggle';
+            checkbox.setAttribute('aria-label', labelText);
+
+            const labelEl = switchEl.querySelector('label.switch');
+            if (labelEl && labelEl.getAttribute('for') !== checkbox.id) labelEl.setAttribute('for', checkbox.id);
+
+            wrapper.setAttribute('data-toggle-wrapper-processed', 'true');
+            checkbox.setAttribute('tabindex', '-1');
+            wrapper.setAttribute('tabindex', '0');
+
+            const triggerToggle = () => {
+              const span = switchEl.querySelector('span.input-toggle-component');
+              if (span) span.click();
+              else { const l = switchEl.querySelector('label.switch'); if (l) l.click(); }
+              wrapper.focus();
+            };
+            wrapper.addEventListener('keydown', (e) => {
               if (e.key !== 'Enter' && e.key !== ' ') return;
-              const active = iframeDoc.activeElement;
-              const w = active && (active.classList && active.classList.contains('gh-portal-list-toggle-wrapper') ? active : (active.closest && active.closest('.gh-portal-list-toggle-wrapper')));
-              if (!w) return;
-              const toggleSpan = w.querySelector('span.input-toggle-component');
-              const lbl = w.querySelector('label.switch');
-              const cb = w.querySelector('input[type="checkbox"]');
+              if (iframeDoc.activeElement !== wrapper) return;
               e.preventDefault();
               e.stopPropagation();
-              if (toggleSpan) toggleSpan.click(); else if (lbl) lbl.click(); else if (cb) cb.click();
-              // Keep focus on wrapper so tab order position is preserved
+              triggerToggle();
+            }, true);
+          });
+
+          if (!iframeDoc.body.hasAttribute('data-toggle-keydown-bound')) {
+            iframeDoc.body.setAttribute('data-toggle-keydown-bound', 'true');
+            let lastToggleWrapper = null, lastToggleTime = 0;
+            const findToggleWrapper = (el) => {
+              if (!el) return null;
+              if (el.classList && el.classList.contains('gh-portal-list-toggle-wrapper')) return el;
+              if (el.closest && el.closest('.gh-portal-list-toggle-wrapper')) return el.closest('.gh-portal-list-toggle-wrapper');
+              if (el.hasAttribute && el.hasAttribute('data-toggle-wrapper-processed') && el.querySelector && el.querySelector('.gh-portal-for-switch')) return el;
+              if (el.closest && el.closest('[data-toggle-wrapper-processed]')) return el.closest('[data-toggle-wrapper-processed]');
+              return null;
+            };
+            const doToggle = (w) => {
+              const span = w.querySelector('span.input-toggle-component');
+              if (span) span.click();
               w.focus();
+            };
+            iframeDoc.addEventListener('keydown', (e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              const w = findToggleWrapper(iframeDoc.activeElement);
+              if (!w) return;
+              lastToggleWrapper = w;
+              lastToggleTime = Date.now();
+              e.preventDefault();
+              e.stopPropagation();
+              doToggle(w);
+            }, true);
+            iframeDoc.addEventListener('keyup', (e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              const w = findToggleWrapper(iframeDoc.activeElement);
+              if (!w) return;
+              if (lastToggleWrapper === w && (Date.now() - lastToggleTime) < 400) return;
+              e.preventDefault();
+              e.stopPropagation();
+              doToggle(w);
+              lastToggleWrapper = w;
+              lastToggleTime = Date.now();
             }, true);
           }
 
@@ -321,12 +356,14 @@
             styleEl.id = 'toggle-wrapper-focus-styles';
             styleEl.textContent = `
               .gh-portal-list-toggle-wrapper:focus,
-              .gh-portal-list-toggle-wrapper:focus-within {
+              .gh-portal-list-toggle-wrapper:focus-within,
+              [data-toggle-wrapper-processed]:focus {
                 outline: 2px solid var(--black);
                 outline-offset: 2px;
                 border-radius: 4px;
               }
-              .gh-portal-list-toggle-wrapper input[type="checkbox"]:focus {
+              .gh-portal-list-toggle-wrapper input[type="checkbox"]:focus,
+              [data-toggle-wrapper-processed] input[type="checkbox"]:focus {
                 outline: none;
               }
             `;
@@ -661,11 +698,8 @@
                   };
                   const iframeEl = ghostPortalWrapper.firstChild;
 
-                  // set the title of the iframe 
-                  iframeEl.title = identifyTitle(iframeDoc);
-                  adjustCadenceLabels(iframeDoc);
-                  adjustCadenceToggle(iframeDoc);
-                  redrawErrorMessages(iframeDoc);
+                  // set the title of the iframe and run all adjustments so toggles etc. are tabbable before focus trap
+                  runAllAdjustments(iframeDoc);
 
                   // Watch for error messages appearing dynamically
                   const errorObserver = new MutationObserver((mutations) => {
