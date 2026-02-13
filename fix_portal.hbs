@@ -37,6 +37,9 @@
           const productName = productCard.querySelector('h4.gh-portal-product-name').textContent;
           const productButton = productCard.querySelector('.gh-portal-btn');
           productButton.setAttribute('aria-label', `Choose ${productName} subscription`);
+          productCard.querySelectorAll('.gh-portal-benefit-checkmark').forEach(benefit => {
+            benefit.setAttribute('aria-hidden', 'true');
+          });
         });
 
       }
@@ -134,10 +137,168 @@
         });
       }
 
+      const adjustMagiclinkState = (iframeDoc) => {
+        try {
+          // Check if we're in the magiclink state
+          const magiclinkWrapper = iframeDoc.querySelector('.gh-portal-popup-wrapper.magiclink');
+          if (!magiclinkWrapper) {
+            return;
+          }
+
+          // Make the close button container focusable (not the SVG inside)
+          const closeContainer = iframeDoc.querySelector('.gh-portal-closeicon-container[data-test-button="close-popup"]');
+          if (closeContainer && !closeContainer.hasAttribute('data-magiclink-processed')) {
+            // Mark as processed to avoid reprocessing
+            closeContainer.setAttribute('data-magiclink-processed', 'true');
+            
+            // Make container focusable
+            if (!closeContainer.hasAttribute('tabindex')) {
+              closeContainer.setAttribute('tabindex', '0');
+              closeContainer.setAttribute('role', 'button');
+              closeContainer.setAttribute('aria-label', 'Close popup');
+              
+              // Add keyboard event handler for Enter and Space
+              const handleKeydown = (e) => {
+                if(e.key === 'Enter' || e.key === ' '){
+                  e.preventDefault();
+                  closeContainer.click();
+                }
+              };
+              closeContainer.addEventListener('keydown', handleKeydown);
+            }
+            
+            // Remove tabindex from SVG if it exists (to avoid duplicate focus)
+            const closeIconSvg = closeContainer.querySelector('.gh-portal-closeicon');
+            if (closeIconSvg && closeIconSvg.hasAttribute('tabindex')) {
+              closeIconSvg.removeAttribute('tabindex');
+            }
+          }
+
+          // Add aria-live announcement for "Now check your email!"
+          const inboxNotification = iframeDoc.querySelector('.gh-portal-inbox-notification');
+          if (inboxNotification) {
+            // Create or find an aria-live region
+            let liveRegion = iframeDoc.getElementById('magiclink-announcement');
+            if (!liveRegion) {
+              liveRegion = iframeDoc.createElement('div');
+              liveRegion.id = 'magiclink-announcement';
+              liveRegion.setAttribute('aria-live', 'polite');
+              liveRegion.setAttribute('aria-atomic', 'true');
+              liveRegion.className = 'sr-only';
+              liveRegion.style.cssText = 'position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0;';
+              iframeDoc.body.appendChild(liveRegion);
+            }
+            
+            // Announce the message (only update if it changed to avoid unnecessary announcements)
+            const titleElement = inboxNotification.querySelector('.gh-portal-main-title');
+            if (titleElement) {
+              const newText = titleElement.textContent.trim();
+              if (liveRegion.textContent !== newText) {
+                liveRegion.textContent = newText;
+              }
+            }
+          }
+
+          // Ensure code input has a proper label
+          const codeInput = iframeDoc.querySelector('#input-otc');
+          if (codeInput && !codeInput.hasAttribute('data-magiclink-processed')) {
+            // Mark as processed
+            codeInput.setAttribute('data-magiclink-processed', 'true');
+            
+            // Check if it already has a visible label
+            const otpSection = codeInput.closest('.gh-portal-otp');
+            if (otpSection) {
+              // Create a label element if it doesn't exist
+              let label = iframeDoc.querySelector('label[for="input-otc"]');
+              if (!label) {
+                label = iframeDoc.createElement('label');
+                label.setAttribute('for', 'input-otc');
+                label.className = 'sr-only';
+                label.style.cssText = 'position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0;';
+                label.textContent = 'Enter your verification code';
+                codeInput.parentNode.insertBefore(label, codeInput);
+              }
+              
+              // Ensure aria-label is set properly
+              if (!codeInput.getAttribute('aria-label') || codeInput.getAttribute('aria-label') === 'Code') {
+                codeInput.setAttribute('aria-label', 'Enter your verification code');
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error in adjustMagiclinkState:', error);
+        }
+      }
+
+      // Persistent observer for magiclink state - runs independently
+      const magiclinkObservers = new WeakMap();
+      const magiclinkTimeouts = new WeakMap();
+      const setupMagiclinkObserver = (iframeDoc) => {
+        // Only set up once per iframe document
+        if (!iframeDoc || !iframeDoc.body) {
+          return;
+        }
+        
+        if (magiclinkObservers.has(iframeDoc)) {
+          // Observer already exists, just check current state
+          adjustMagiclinkState(iframeDoc);
+          return;
+        }
+        
+        // Debounced version of adjustMagiclinkState to prevent excessive calls
+        const debouncedAdjust = () => {
+          const existingTimeout = magiclinkTimeouts.get(iframeDoc);
+          if (existingTimeout) {
+            clearTimeout(existingTimeout);
+          }
+          
+          const timeout = setTimeout(() => {
+            adjustMagiclinkState(iframeDoc);
+            magiclinkTimeouts.delete(iframeDoc);
+          }, 100); // Small delay to batch rapid mutations
+          
+          magiclinkTimeouts.set(iframeDoc, timeout);
+        };
+        
+        // Watch for magiclink state appearing dynamically
+        const observer = new MutationObserver((mutations) => {
+          // Only process if mutations are relevant (not from our own changes)
+          const hasRelevantChanges = mutations.some(mutation => {
+            // Skip if mutation is from our processed elements
+            if (mutation.target.hasAttribute && mutation.target.hasAttribute('data-magiclink-processed')) {
+              return false;
+            }
+            // Skip if mutation is from our live region
+            if (mutation.target.id === 'magiclink-announcement') {
+              return false;
+            }
+            return true;
+          });
+          
+          if (hasRelevantChanges) {
+            debouncedAdjust();
+          }
+        });
+        observer.observe(iframeDoc.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['class']
+        });
+        
+        magiclinkObservers.set(iframeDoc, observer);
+        
+        // Also check immediately
+        adjustMagiclinkState(iframeDoc);
+      };
+
       const rewritePortal = () => {
               const iframeDoc = ghostPortalWrapper.firstChild.contentDocument;
               if(iframeDoc && iframeDoc.head){
                 const closeIcon = iframeDoc.querySelector('.gh-portal-closeicon');
+                
+                // Set up magiclink observer regardless of stylesheet state
+                setupMagiclinkObserver(iframeDoc);
                 
                 // Check if stylesheet already exists and element is ready
                 if(!iframeDoc.getElementById('injected-stylesheet') && closeIcon){
@@ -154,6 +315,15 @@
                     .gh-portal-closeicon-container {
                       cursor: pointer;
                     }
+                    .gh-portal-closeicon-container:focus {
+                      outline: 2px solid var(--grey1);
+                      outline-offset: 2px;
+                    }
+                    .gh-portal-closeicon-container:focus-visible {
+                      outline: 2px solid var(--black);
+                      outline-offset: 2px;
+                      border-radius: 50%;
+                    }
                     .gh-portal-closeicon:focus {
                       outline: 2px solid var(--grey1);
                       outline-offset: 2px;
@@ -168,7 +338,14 @@
                       outline-offset: 2px;
                     }
                     .gh-portal-input:focus-visible {
-                      border-color: var(--black);}
+                      border-color: var(--black);
+                      }
+                    .gh-portal-products-pricetoggle {
+                     background-color: var(--grey1);
+                     }
+                    .gh-portal-products-pricetoggle .gh-portal-btn[aria-checked="false"] {
+                      color: white;
+                      }
                   `;
                   iframeDoc.head.appendChild(styleSheet);
 
@@ -312,6 +489,10 @@
                   console.log('Portal rewritten successfully');
                   clearInterval(portalRewriter);
                 }
+                
+                // Always check and adjust magiclink state, even if stylesheet already exists
+                // This handles navigation from sign-in to magiclink state
+                adjustMagiclinkState(iframeDoc);
               }
             }
 
