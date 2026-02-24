@@ -658,7 +658,19 @@
                     
                     // Add keyboard event handler for Enter and Space
                     closeIcon.addEventListener('keydown', (e) => {
-                      if(e.key === 'Enter' || e.key === ' '){
+                      if(e.key === 'Enter'){
+                        e.preventDefault();
+                        // Dispatch a click event since SVG elements may not support .click()
+                        const clickEvent = new MouseEvent('click', {
+                          bubbles: true,
+                          cancelable: true,
+                          view: iframeDoc.defaultView
+                        });
+                        closeIcon.dispatchEvent(clickEvent);
+                      }
+                    });
+                    closeIcon.addEventListener('keyup', (e) => {
+                      if(e.key === ' '){
                         e.preventDefault();
                         // Dispatch a click event since SVG elements may not support .click()
                         const clickEvent = new MouseEvent('click', {
